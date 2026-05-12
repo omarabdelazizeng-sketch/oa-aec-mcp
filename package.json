@@ -2,9 +2,11 @@
   "name": "oa-aec-mcp",
   "version": "1.0.0",
   "description": "",
-  "main": "index.js",
+  "main": "dist/index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsc && node dist/index.js"
   },
   "repository": {
     "type": "git",
@@ -13,16 +15,18 @@
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "type": "commonjs",
+  "type": "module",
   "bugs": {
     "url": "https://github.com/omarabdelazizeng-sketch/oa-aec-mcp/issues"
   },
   "homepage": "https://github.com/omarabdelazizeng-sketch/oa-aec-mcp#readme",
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.29.0"
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "ws": "^8.20.1"
   },
   "devDependencies": {
     "@types/node": "^25.7.0",
+    "@types/ws": "^8.18.1",
     "typescript": "^6.0.3"
   }
 }
