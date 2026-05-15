@@ -14,14 +14,31 @@ function pingWebSocket(): Promise<string> {
     }, 10_000);
 
     ws.once("open", () => {
-      ws.send("ping");
-    });
+  const request = JSON.stringify({
+    jsonrpc: "2.0",
+    method: "ping",
+    params: {},
+    id: Math.random().toString(36).slice(2),
+  });
+  ws.send(request);
+});
 
     ws.once("message", (data) => {
-      clearTimeout(timeout);
-      ws.close();
-      resolve(data.toString());
-    });
+  clearTimeout(timeout);
+  ws.close();
+  try {
+    const parsed = JSON.parse(data.toString());
+    if (parsed.result !== undefined) {
+      resolve(JSON.stringify(parsed.result));
+    } else if (parsed.error) {
+      reject(new Error(parsed.error.message));
+    } else {
+      reject(new Error("Unexpected response: " + data.toString()));
+    }
+  } catch {
+    reject(new Error("Non-JSON response: " + data.toString()));
+  }
+});
 
     ws.once("error", (err) => {
       clearTimeout(timeout);
