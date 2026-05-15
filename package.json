@@ -22,10 +22,12 @@
   "homepage": "https://github.com/omarabdelazizeng-sketch/oa-aec-mcp#readme",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "uuid": "^11.0.0",
     "ws": "^8.20.1"
   },
   "devDependencies": {
     "@types/node": "^25.7.0",
+    "@types/uuid": "^10.0.0",
     "@types/ws": "^8.18.1",
     "typescript": "^6.0.3"
   }
