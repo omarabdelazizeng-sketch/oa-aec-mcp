@@ -129,5 +129,35 @@ server.tool(
   }
 );
 
+server.tool(
+  "audit_naming_conventions",
+  "Audit element names in the active Revit model against a regex pattern and return a grouped violations report. " +
+  "IMPORTANT: pattern must be a regex — if the user describes a naming convention in natural language, " +
+  "convert it to a regex before calling this tool. " +
+  "Supported categories: Views, Sheets, Rooms, Levels, Walls, Doors, Windows, Families. " +
+  "Default categories (when omitted): Views, Sheets, Rooms, Levels.",
+  {
+    pattern: z.string().describe(
+      "Regular expression to test element names against. Names that do NOT match are reported as violations."
+    ),
+    categories: z.array(z.string()).optional().describe(
+      "Categories to audit. Defaults to [\"Views\", \"Sheets\", \"Rooms\", \"Levels\"] when omitted. " +
+      "Supported: Views, Sheets, Rooms, Levels, Walls, Doors, Windows, Families. Unknown names are returned in unknown_categories."
+    ),
+    max_violations: z.number().int().optional().describe(
+      "Maximum violations to return per category (default 50, max 200). The true violation_count is always returned; truncated: true signals the list was capped."
+    ),
+  },
+  async ({ pattern, categories, max_violations }) => {
+    const params: Record<string, unknown> = { pattern };
+    if (categories !== undefined) params["categories"] = categories;
+    if (max_violations !== undefined) params["max_violations"] = max_violations;
+    const result = await callWebSocket("audit_naming_conventions", params);
+    return {
+      content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+    };
+  }
+);
+
 const transport = new StdioServerTransport();
 await server.connect(transport);
