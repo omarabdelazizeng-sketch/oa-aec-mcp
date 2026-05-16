@@ -92,5 +92,17 @@ server.tool(
   }
 );
 
+server.tool(
+  "list_unplaced_rooms",
+  "List all unplaced rooms in the active Revit model (rooms with no bounding elements), including their name, number, and level",
+  {},
+  async () => {
+    const result = await callWebSocket("list_unplaced_rooms");
+    return {
+      content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+    };
+  }
+);
+
 const transport = new StdioServerTransport();
 await server.connect(transport);
