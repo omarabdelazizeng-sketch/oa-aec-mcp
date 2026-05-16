@@ -1,6 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import WebSocket from "ws";
+import { z } from "zod";
 
 const WS_URL = "ws://localhost:8765";
 
@@ -94,10 +95,34 @@ server.tool(
 
 server.tool(
   "list_unplaced_rooms",
-  "List all unplaced rooms in the active Revit model (rooms with no bounding elements), including their name, number, and level",
-  {},
-  async () => {
-    const result = await callWebSocket("list_unplaced_rooms");
+  "List all unplaced rooms in the active Revit model (rooms with no bounding elements), returning id, name, department, and level_name for each. Optionally filter by level name.",
+  {
+    level: z.string().optional().describe(
+      "Filter by level name (case-insensitive exact match, e.g. \"Level 1\"). Omit to return all levels."
+    ),
+  },
+  async ({ level }) => {
+    const params: Record<string, unknown> = {};
+    if (level !== undefined) params["level"] = level;
+    const result = await callWebSocket("list_unplaced_rooms", params);
+    return {
+      content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+    };
+  }
+);
+
+server.tool(
+  "find_warnings_by_category",
+  "Return Revit model warnings grouped by description, ordered by count. Optionally filter by the Revit category of the failing elements (e.g. \"Walls\", \"Rooms\", \"Floors\").",
+  {
+    category: z.string().optional().describe(
+      "Revit category name to filter by (case-insensitive exact match). Omit or pass \"all\" to return warnings across all categories."
+    ),
+  },
+  async ({ category }) => {
+    const params: Record<string, unknown> = {};
+    if (category !== undefined) params["category"] = category;
+    const result = await callWebSocket("find_warnings_by_category", params);
     return {
       content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
     };
