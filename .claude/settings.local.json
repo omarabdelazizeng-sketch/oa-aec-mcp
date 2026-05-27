@@ -2,7 +2,10 @@
   "permissions": {
     "allow": [
       "Bash(npm install:*)",
-      "Bash(npm run:*)"
+      "Bash(npm run:*)",
+      "Bash(ls -la /mnt/d/Dev/repos/ 2>/dev/null || echo \"PATH_CHECK\")",
+      "PowerShell(dotnet build \"D:\\\\Dev\\\\repos\\\\oa-aec-mcp-plugin\\\\OaAecMcpPlugin\\\\OaAecMcpPlugin.csproj\" --configuration Release 2>&1)",
+      "PowerShell(Get-ChildItem \"C:\\\\Program Files\\\\dotnet\\\\shared\" -Recurse -Directory | Select-Object Name | Select-Object -First 10; Get-ChildItem \"${env:ProgramFiles\\(x86\\)}\\\\Microsoft Visual Studio\" -ErrorAction SilentlyContinue | Select-Object Name; Get-ChildItem \"${env:ProgramFiles}\\\\Microsoft Visual Studio\" -ErrorAction SilentlyContinue | Select-Object Name)"
     ]
   }
 }
