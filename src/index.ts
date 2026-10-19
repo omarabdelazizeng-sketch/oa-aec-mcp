@@ -11,15 +11,16 @@ const WS_URL = "ws://localhost:8765";
 
 function callWebSocket(
   method: string,
-  params: Record<string, unknown> = {}
+  params: Record<string, unknown> = {},
+  timeoutMs = 10_000
 ): Promise<unknown> {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(WS_URL);
 
     const timeout = setTimeout(() => {
       ws.terminate();
-      reject(new Error(`WebSocket call '${method}' timed out after 10s`));
-    }, 10_000);
+      reject(new Error(`WebSocket call '${method}' timed out after ${timeoutMs / 1000}s`));
+    }, timeoutMs);
 
     ws.once("open", () => {
       ws.send(
@@ -155,6 +156,40 @@ server.tool(
     const result = await callWebSocket("audit_naming_conventions", params);
     return {
       content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+    };
+  }
+);
+
+server.tool(
+  "get_schedule_data",
+  "READ-ONLY. Return the contents of a Revit schedule exactly as displayed (Revit's own filters, sorting and formatting). " +
+  "Uses the active view when schedule_name is omitted (the active view must then be a schedule). " +
+  "Optionally keep only rows whose filter_column cell contains filter_contains (case-insensitive). " +
+  "Returns columns (visible headings), rows (string[][]), is_itemized, matched_rows and truncated.",
+  {
+    schedule_name: z.string().optional().describe(
+      "Schedule view name (case-insensitive exact match). Omit to use the active view."
+    ),
+    filter_column: z.string().optional().describe(
+      "Visible column heading to filter on (case-insensitive), e.g. \"LEVEL\". Must be used with filter_contains."
+    ),
+    filter_contains: z.string().optional().describe(
+      "Keep only rows whose filter_column cell contains this text (case-insensitive), e.g. \"LEVEL 05\"."
+    ),
+    max_rows: z.number().int().optional().describe(
+      "Maximum rows to return (default 5000, max 20000). matched_rows always reports the true count."
+    ),
+  },
+  async ({ schedule_name, filter_column, filter_contains, max_rows }) => {
+    const params: Record<string, unknown> = {};
+    if (schedule_name !== undefined) params["schedule_name"] = schedule_name;
+    if (filter_column !== undefined) params["filter_column"] = filter_column;
+    if (filter_contains !== undefined) params["filter_contains"] = filter_contains;
+    if (max_rows !== undefined) params["max_rows"] = max_rows;
+    // Large schedules take longer to read; match the plugin's 30s ExternalEvent timeout.
+    const result = await callWebSocket("get_schedule_data", params, 30_000);
+    return {
+      content: [{ type: "text", text: JSON.stringify(result) }],
     };
   }
 );
