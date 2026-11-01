@@ -11,15 +11,16 @@ const WS_URL = "ws://localhost:8765";
 
 function callWebSocket(
   method: string,
-  params: Record<string, unknown> = {}
+  params: Record<string, unknown> = {},
+  timeoutMs = 10_000
 ): Promise<unknown> {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(WS_URL);
 
     const timeout = setTimeout(() => {
       ws.terminate();
-      reject(new Error(`WebSocket call '${method}' timed out after 10s`));
-    }, 10_000);
+      reject(new Error(`WebSocket call '${method}' timed out after ${timeoutMs / 1000}s`));
+    }, timeoutMs);
 
     ws.once("open", () => {
       ws.send(
@@ -153,6 +154,59 @@ server.tool(
     if (categories !== undefined) params["categories"] = categories;
     if (max_violations !== undefined) params["max_violations"] = max_violations;
     const result = await callWebSocket("audit_naming_conventions", params);
+    return {
+      content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+    };
+  }
+);
+
+server.tool(
+  "get_datums",
+  "Read-only. Return every level and grid in the active Revit model plus the Project Base Point, Survey Point " +
+  "and true-north angle, all in millimetres. Levels give internal_elevation_mm (relative to the internal origin) " +
+  "and elevation_mm (relative to the level type's elevation base). Grids give start_mm/end_mm and is_curved. " +
+  "Reports raw facts only — use it to CHECK a model against a spec independently of apply_datums.",
+  {},
+  async () => {
+    const result = await callWebSocket("get_datums");
+    return {
+      content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+    };
+  }
+);
+
+server.tool(
+  "apply_datums",
+  "Create or update the project datum, levels and grids in the active Revit model from a spec, in ONE transaction. " +
+  "Idempotent: elements are matched by name and re-running the same spec changes nothing. Never deletes elements " +
+  "that are not in the spec (they are reported as warnings). Order is fixed: datum, then levels, then grids. " +
+  "The Project Base Point is kept at the internal origin; datum sets the shared coordinates of the internal origin. " +
+  "Level elevations are relative to the internal origin. All lengths in millimetres. " +
+  "Always verify the result with get_datums afterwards.",
+  {
+    datum: z.object({
+      x_mm: z.number().default(0).describe("Shared East/West of the internal origin (mm)"),
+      y_mm: z.number().default(0).describe("Shared North/South of the internal origin (mm)"),
+      elevation_mm: z.number().describe("Shared elevation of the internal origin / ±0.00 (mm), e.g. 213200"),
+      angle_to_true_north_deg: z.number().default(0),
+    }).optional(),
+    levels: z.array(z.object({
+      name: z.string().min(1),
+      elevation_mm: z.number().describe("Elevation relative to the internal origin (mm)"),
+    })).optional(),
+    grids: z.array(z.object({
+      name: z.string().min(1),
+      start_mm: z.array(z.number()).length(2).describe("[x, y] in mm"),
+      end_mm: z.array(z.number()).length(2).describe("[x, y] in mm"),
+    })).optional(),
+    create_floor_plans: z.boolean().default(true).describe("Create a floor plan for any spec level that has none"),
+  },
+  async ({ datum, levels, grids, create_floor_plans }) => {
+    const params: Record<string, unknown> = { create_floor_plans };
+    if (datum !== undefined) params["datum"] = datum;
+    if (levels !== undefined) params["levels"] = levels;
+    if (grids !== undefined) params["grids"] = grids;
+    const result = await callWebSocket("apply_datums", params, 35_000);
     return {
       content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
     };
