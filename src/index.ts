@@ -11,15 +11,16 @@ const WS_URL = "ws://localhost:8765";
 
 function callWebSocket(
   method: string,
-  params: Record<string, unknown> = {}
+  params: Record<string, unknown> = {},
+  timeoutMs = 10_000
 ): Promise<unknown> {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(WS_URL);
 
     const timeout = setTimeout(() => {
       ws.terminate();
-      reject(new Error(`WebSocket call '${method}' timed out after 10s`));
-    }, 10_000);
+      reject(new Error(`WebSocket call '${method}' timed out after ${timeoutMs / 1000}s`));
+    }, timeoutMs);
 
     ws.once("open", () => {
       ws.send(
@@ -156,6 +157,189 @@ server.tool(
     return {
       content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
     };
+  }
+);
+
+server.tool(
+  "get_schedule_data",
+  "READ-ONLY. Return the contents of a Revit schedule exactly as displayed (Revit's own filters, sorting and formatting). " +
+  "Uses the active view when schedule_name is omitted (the active view must then be a schedule). " +
+  "Optionally keep only rows whose filter_column cell contains filter_contains (case-insensitive). " +
+  "Returns columns (visible headings), rows (string[][]), is_itemized, matched_rows and truncated.",
+  {
+    schedule_name: z.string().optional().describe(
+      "Schedule view name (case-insensitive exact match). Omit to use the active view."
+    ),
+    filter_column: z.string().optional().describe(
+      "Visible column heading to filter on (case-insensitive), e.g. \"LEVEL\". Must be used with filter_contains."
+    ),
+    filter_contains: z.string().optional().describe(
+      "Keep only rows whose filter_column cell contains this text (case-insensitive), e.g. \"LEVEL 05\"."
+    ),
+    max_rows: z.number().int().optional().describe(
+      "Maximum rows to return (default 5000, max 20000). matched_rows always reports the true count."
+    ),
+  },
+  async ({ schedule_name, filter_column, filter_contains, max_rows }) => {
+    const params: Record<string, unknown> = {};
+    if (schedule_name !== undefined) params["schedule_name"] = schedule_name;
+    if (filter_column !== undefined) params["filter_column"] = filter_column;
+    if (filter_contains !== undefined) params["filter_contains"] = filter_contains;
+    if (max_rows !== undefined) params["max_rows"] = max_rows;
+    // Large schedules take longer to read; match the plugin's 30s ExternalEvent timeout.
+    const result = await callWebSocket("get_schedule_data", params, 30_000);
+    return {
+      content: [{ type: "text", text: JSON.stringify(result) }],
+    };
+  }
+);
+
+server.tool(
+  "get_datums",
+  "Read-only. Return every level and grid in the active Revit model plus the Project Base Point, Survey Point " +
+  "and true-north angle, all in millimetres. Levels give internal_elevation_mm (relative to the internal origin) " +
+  "and elevation_mm (relative to the level type's elevation base). Grids give start_mm/end_mm and is_curved. " +
+  "Reports raw facts only — use it to CHECK a model against a spec independently of apply_datums.",
+  {},
+  async () => {
+    const result = await callWebSocket("get_datums");
+    return {
+      content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+    };
+  }
+);
+
+server.tool(
+  "apply_datums",
+  "Create or update the project datum, levels and grids in the active Revit model from a spec, in ONE transaction. " +
+  "Idempotent: elements are matched by name and re-running the same spec changes nothing. Never deletes elements " +
+  "that are not in the spec (they are reported as warnings). Order is fixed: datum, then levels, then grids. " +
+  "The Project Base Point is kept at the internal origin; datum sets the shared coordinates of the internal origin. " +
+  "Level elevations are relative to the internal origin. All lengths in millimetres. " +
+  "Always verify the result with get_datums afterwards.",
+  {
+    datum: z.object({
+      x_mm: z.number().default(0).describe("Shared East/West of the internal origin (mm)"),
+      y_mm: z.number().default(0).describe("Shared North/South of the internal origin (mm)"),
+      elevation_mm: z.number().describe("Shared elevation of the internal origin / ±0.00 (mm), e.g. 213200"),
+      angle_to_true_north_deg: z.number().default(0),
+    }).optional(),
+    levels: z.array(z.object({
+      name: z.string().min(1),
+      elevation_mm: z.number().describe("Elevation relative to the internal origin (mm)"),
+    })).optional(),
+    grids: z.array(z.object({
+      name: z.string().min(1),
+      start_mm: z.array(z.number()).length(2).describe("[x, y] in mm"),
+      end_mm: z.array(z.number()).length(2).describe("[x, y] in mm"),
+    })).optional(),
+    create_floor_plans: z.boolean().default(true).describe("Create a floor plan for any spec level that has none"),
+  },
+  async ({ datum, levels, grids, create_floor_plans }) => {
+    const params: Record<string, unknown> = { create_floor_plans };
+    if (datum !== undefined) params["datum"] = datum;
+    if (levels !== undefined) params["levels"] = levels;
+    if (grids !== undefined) params["grids"] = grids;
+    const result = await callWebSocket("apply_datums", params, 35_000);
+    return {
+      content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+    };
+  }
+);
+
+const pt = z.array(z.number()).length(2).describe("[x, y] in mm");
+
+server.tool(
+  "ensure_types",
+  "Create or update element types in the active Revit model, in ONE transaction (modeling step 4). " +
+  "Idempotent: matched by type name, updated only where different, never deleted. " +
+  "Columns: duplicate a loaded family type and set its length parameters (e.g. b, h) in mm. " +
+  "Floors/walls: duplicate a base type and replace its layers (function, width_mm, material name). " +
+  "Walls must be Basic walls.",
+  {
+    types: z.array(z.object({
+      kind: z.enum(["structural_column", "column", "floor", "wall"]),
+      name: z.string().min(1),
+      family: z.string().optional().describe("Required for columns: loaded family name"),
+      base_type: z.string().optional().describe("Type to duplicate when the named type does not exist"),
+      params_mm: z.record(z.string(), z.number()).optional().describe("Column type length parameters in mm, e.g. {\"b\":250,\"h\":500}"),
+      layers: z.array(z.object({
+        function: z.enum(["Structure", "Substrate", "Insulation", "Finish1", "Finish2", "Membrane", "StructuralDeck"]),
+        width_mm: z.number().min(0),
+        material: z.string().optional(),
+      })).optional().describe("Floor/wall layers, exterior/top first"),
+    })).min(1),
+  },
+  async ({ types }) => {
+    const result = await callWebSocket("ensure_types", { types }, 35_000);
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
+server.tool(
+  "apply_columns",
+  "Place or update columns in the active Revit model, in ONE transaction (modeling step 6). " +
+  "Idempotent: matched by Mark within the category; updates type, position, rotation, levels and offsets in place; " +
+  "columns whose Mark is not in the spec are never touched. All lengths in mm. Keep batches to a few hundred. " +
+  "Verify afterwards with get_model_elements.",
+  {
+    columns: z.array(z.object({
+      mark: z.string().min(1),
+      kind: z.enum(["structural", "architectural"]).default("structural"),
+      family: z.string().min(1),
+      type: z.string().min(1),
+      x_mm: z.number(),
+      y_mm: z.number(),
+      rotation_deg: z.number().default(0),
+      base_level: z.string().min(1),
+      base_offset_mm: z.number().default(0),
+      top_level: z.string().min(1),
+      top_offset_mm: z.number().default(0),
+    })).min(1),
+  },
+  async ({ columns }) => {
+    const result = await callWebSocket("apply_columns", { columns }, 35_000);
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
+server.tool(
+  "apply_floors",
+  "Create or update floors/slabs from boundary polygons in the active Revit model, in ONE transaction (modeling step 6). " +
+  "Idempotent: matched by Mark; unchanged floors are left alone, changed ones are replaced with the same Mark; " +
+  "floors whose Mark is not in the spec are never touched. Straight edges only (send curves as polylines). " +
+  "Openings are inner loops (stairs, shafts). All lengths in mm. Verify afterwards with get_model_elements.",
+  {
+    floors: z.array(z.object({
+      mark: z.string().min(1),
+      type: z.string().min(1),
+      level: z.string().min(1),
+      offset_mm: z.number().default(0).describe("Height offset from the level (mm)"),
+      structural: z.boolean().default(false),
+      boundary: z.array(pt).min(3),
+      openings: z.array(z.array(pt).min(3)).optional(),
+    })).min(1),
+  },
+  async ({ floors }) => {
+    const result = await callWebSocket("apply_floors", { floors }, 35_000);
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
+server.tool(
+  "get_model_elements",
+  "Read-only. Report structural columns, architectural columns, floors, walls and their types from the active Revit model, " +
+  "in mm (positions, levels, offsets, floor sketch loops, type layers, column type length parameters). " +
+  "Raw facts only — use it to CHECK the model against a spec independently of the apply_* tools.",
+  {
+    categories: z.array(z.enum(["structural_columns", "columns", "floors", "walls", "types"])).optional()
+      .describe("Default: all"),
+  },
+  async ({ categories }) => {
+    const params: Record<string, unknown> = {};
+    if (categories !== undefined) params["categories"] = categories;
+    const result = await callWebSocket("get_model_elements", params, 35_000);
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
   }
 );
 
