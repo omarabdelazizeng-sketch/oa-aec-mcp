@@ -41,11 +41,13 @@ function callWebSocket(
         if (parsed["result"] !== undefined) {
           resolve(parsed["result"]);
         } else if (parsed["error"]) {
-          reject(
-            new Error(
-              (parsed["error"] as { message: string }).message
-            )
-          );
+          // Pass the plugin's detail (exception type + message) through, not just "Internal error",
+          // so a failing Revit call can be diagnosed without opening the plugin log.
+          const err = parsed["error"] as { message: string; data?: unknown };
+          const d = err.data as { type?: string; message?: string } | string | null | undefined;
+          const detail =
+            typeof d === "string" ? d : d && d.message ? `${d.type ? d.type + ": " : ""}${d.message}` : "";
+          reject(new Error(detail ? `${err.message}: ${detail}` : err.message));
         } else {
           reject(new Error("Unexpected response: " + data.toString()));
         }
