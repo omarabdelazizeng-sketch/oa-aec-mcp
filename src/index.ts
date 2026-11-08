@@ -395,6 +395,33 @@ server.tool(
 );
 
 server.tool(
+  "apply_rooms",
+  "Create or update placed rooms in the active Revit model, in ONE transaction. Idempotent by number (numbers must be unique in the whole project): a room whose boundary already " +
+  "contains the point keeps its element and gets name/department/limits updated, otherwise it is replaced; rooms with other numbers are never touched. " +
+  "x/y = a point inside the room (mm). base_offset_mm is measured up from the room's level (finished floor), limit_offset_mm from the upper limit level " +
+  "(default: the same level), so the room runs from the finished floor to the underside of the ceiling. A room that Revit cannot enclose rolls the whole batch back " +
+  "unless allow_unenclosed is true (then it is returned with placed=false and a Revit warning); a point inside another room is rejected as redundant. Walls must already exist and be closed around the room.",
+  {
+    rooms: z.array(z.object({
+      number: z.string().min(1),
+      name: z.string().min(1),
+      level: z.string().min(1),
+      x: z.number(),
+      y: z.number(),
+      base_offset_mm: z.number().default(0),
+      upper_limit_level: z.string().min(1).optional().describe("Default: the room's own level"),
+      limit_offset_mm: z.number().positive().describe("Height of the ceiling underside above the upper limit level"),
+      department: z.string().min(1).optional(),
+    })).min(1),
+    allow_unenclosed: z.boolean().default(false).describe("Keep rooms that Revit cannot enclose (placed=false) instead of rolling back"),
+  },
+  async ({ rooms, allow_unenclosed }) => {
+    const result = await callWebSocket("apply_rooms", { rooms, allow_unenclosed }, 35_000);
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
+server.tool(
   "load_families",
   "Load family files (.rfa) into the active Revit model, in ONE transaction. Skips a family that is already loaded unless overwrite is true. " +
   "Returns each family's type names. Paths must be absolute and exist.",
