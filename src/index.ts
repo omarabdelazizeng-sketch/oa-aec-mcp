@@ -329,12 +329,116 @@ server.tool(
 );
 
 server.tool(
+  "apply_walls",
+  "Create or update straight walls in the active Revit model, in ONE transaction (modeling step 7). " +
+  "Idempotent: matched by Mark; unchanged walls are left alone, changed ones are replaced with the same Mark; " +
+  "walls whose Mark is not in the spec are never touched. start/end = the wall's location line in plan (mm); " +
+  "location_line sets which face the line refers to. With top_level the height follows it, otherwise height_mm is used. " +
+  "Edges within 0.5 deg of an axis (but not exact) are rejected ('slightly off axis'): snap them in the spec. " +
+  "Verify afterwards with get_model_elements.",
+  {
+    walls: z.array(z.object({
+      mark: z.string().min(1),
+      type: z.string().min(1).describe("Existing wall type name (see ensure_types)"),
+      level: z.string().min(1).describe("Base level"),
+      base_offset_mm: z.number().default(0),
+      top_level: z.string().min(1).optional(),
+      top_offset_mm: z.number().default(0),
+      height_mm: z.number().positive().optional().describe("Unconnected height; used only without top_level"),
+      start: pt,
+      end: pt,
+      location_line: z.enum(["Center", "CoreCenter", "FinishFaceExterior", "FinishFaceInterior", "CoreExterior", "CoreInterior"]).default("Center"),
+      structural_usage: z.enum(["NonBearing", "Bearing", "Shear", "Combined"]).default("NonBearing"),
+      flip: z.boolean().default(false),
+    })).min(1),
+  },
+  async ({ walls }) => {
+    const result = await callWebSocket("apply_walls", { walls }, 35_000);
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
+const placement = {
+  mark: z.string().min(1),
+  family: z.string().min(1).describe("Loaded family name (see load_families)"),
+  type: z.string().min(1).describe("Type name inside the family"),
+  host_wall_mark: z.string().min(1).describe("Mark of the host wall (see apply_walls)"),
+  position: pt.describe("Point in plan (mm); the instance is placed at the nearest point of the host wall's location line (max 200 mm away)"),
+  level: z.string().min(1).optional().describe("Default: the wall's base level"),
+  sill_height_mm: z.number().optional(),
+  flip_hand: z.boolean().default(false),
+  flip_facing: z.boolean().default(false),
+};
+
+server.tool(
+  "apply_doors",
+  "Create or update doors hosted on walls in the active Revit model, in ONE transaction (modeling step 8). Idempotent by Mark: " +
+  "unchanged doors are left alone, changed ones are replaced with the same Mark; doors with other Marks are never touched. " +
+  "Family and type must already be loaded (load_families). All lengths in mm. Verify afterwards with get_model_elements (categories doors).",
+  { doors: z.array(z.object(placement)).min(1) },
+  async ({ doors }) => {
+    const result = await callWebSocket("apply_doors", { doors }, 35_000);
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
+server.tool(
+  "apply_windows",
+  "Create or update windows hosted on walls in the active Revit model, in ONE transaction (modeling step 8). Idempotent by Mark: " +
+  "unchanged windows are left alone, changed ones are replaced with the same Mark; windows with other Marks are never touched. " +
+  "Family and type must already be loaded (load_families). All lengths in mm. Verify afterwards with get_model_elements (categories windows).",
+  { windows: z.array(z.object(placement)).min(1) },
+  async ({ windows }) => {
+    const result = await callWebSocket("apply_windows", { windows }, 35_000);
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
+server.tool(
+  "apply_rooms",
+  "Create or update placed rooms in the active Revit model, in ONE transaction. Idempotent by number (numbers must be unique in the whole project): a room whose boundary already " +
+  "contains the point keeps its element and gets name/department/limits updated, otherwise it is replaced; rooms with other numbers are never touched. " +
+  "x/y = a point inside the room (mm). base_offset_mm is measured up from the room's level (finished floor), limit_offset_mm from the upper limit level " +
+  "(default: the same level), so the room runs from the finished floor to the underside of the ceiling. A room that Revit cannot enclose rolls the whole batch back " +
+  "unless allow_unenclosed is true (then it is returned with placed=false and a Revit warning); a point inside another room is rejected as redundant. Walls must already exist and be closed around the room.",
+  {
+    rooms: z.array(z.object({
+      number: z.string().min(1),
+      name: z.string().min(1),
+      level: z.string().min(1),
+      x: z.number(),
+      y: z.number(),
+      base_offset_mm: z.number().default(0),
+      upper_limit_level: z.string().min(1).optional().describe("Default: the room's own level"),
+      limit_offset_mm: z.number().positive().describe("Height of the ceiling underside above the upper limit level"),
+      department: z.string().min(1).optional(),
+    })).min(1),
+    allow_unenclosed: z.boolean().default(false).describe("Keep rooms that Revit cannot enclose (placed=false) instead of rolling back"),
+  },
+  async ({ rooms, allow_unenclosed }) => {
+    const result = await callWebSocket("apply_rooms", { rooms, allow_unenclosed }, 35_000);
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
+server.tool(
+  "load_families",
+  "Load family files (.rfa) into the active Revit model, in ONE transaction. Skips a family that is already loaded unless overwrite is true. " +
+  "Returns each family's type names. Paths must be absolute and exist.",
+  { families: z.array(z.object({ path: z.string().min(1), overwrite: z.boolean().default(false) })).min(1) },
+  async ({ families }) => {
+    const result = await callWebSocket("load_families", { families }, 60_000);
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
+server.tool(
   "get_model_elements",
   "Read-only. Report structural columns, architectural columns, floors, walls and their types from the active Revit model, " +
   "in mm (positions, levels, offsets, floor sketch loops, type layers, column type length parameters). " +
   "Raw facts only — use it to CHECK the model against a spec independently of the apply_* tools.",
   {
-    categories: z.array(z.enum(["structural_columns", "columns", "floors", "walls", "types"])).optional()
+    categories: z.array(z.enum(["structural_columns", "columns", "floors", "walls", "doors", "windows", "types"])).optional()
       .describe("Default: all"),
   },
   async ({ categories }) => {
