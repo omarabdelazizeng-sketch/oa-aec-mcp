@@ -358,13 +358,60 @@ server.tool(
   }
 );
 
+const placement = {
+  mark: z.string().min(1),
+  family: z.string().min(1).describe("Loaded family name (see load_families)"),
+  type: z.string().min(1).describe("Type name inside the family"),
+  host_wall_mark: z.string().min(1).describe("Mark of the host wall (see apply_walls)"),
+  position: pt.describe("Point in plan (mm); the instance is placed at the nearest point of the host wall's location line (max 200 mm away)"),
+  level: z.string().min(1).optional().describe("Default: the wall's base level"),
+  sill_height_mm: z.number().optional(),
+  flip_hand: z.boolean().default(false),
+  flip_facing: z.boolean().default(false),
+};
+
+server.tool(
+  "apply_doors",
+  "Create or update doors hosted on walls in the active Revit model, in ONE transaction (modeling step 8). Idempotent by Mark: " +
+  "unchanged doors are left alone, changed ones are replaced with the same Mark; doors with other Marks are never touched. " +
+  "Family and type must already be loaded (load_families). All lengths in mm. Verify afterwards with get_model_elements (categories doors).",
+  { doors: z.array(z.object(placement)).min(1) },
+  async ({ doors }) => {
+    const result = await callWebSocket("apply_doors", { doors }, 35_000);
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
+server.tool(
+  "apply_windows",
+  "Create or update windows hosted on walls in the active Revit model, in ONE transaction (modeling step 8). Idempotent by Mark: " +
+  "unchanged windows are left alone, changed ones are replaced with the same Mark; windows with other Marks are never touched. " +
+  "Family and type must already be loaded (load_families). All lengths in mm. Verify afterwards with get_model_elements (categories windows).",
+  { windows: z.array(z.object(placement)).min(1) },
+  async ({ windows }) => {
+    const result = await callWebSocket("apply_windows", { windows }, 35_000);
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
+server.tool(
+  "load_families",
+  "Load family files (.rfa) into the active Revit model, in ONE transaction. Skips a family that is already loaded unless overwrite is true. " +
+  "Returns each family's type names. Paths must be absolute and exist.",
+  { families: z.array(z.object({ path: z.string().min(1), overwrite: z.boolean().default(false) })).min(1) },
+  async ({ families }) => {
+    const result = await callWebSocket("load_families", { families }, 60_000);
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
 server.tool(
   "get_model_elements",
   "Read-only. Report structural columns, architectural columns, floors, walls and their types from the active Revit model, " +
   "in mm (positions, levels, offsets, floor sketch loops, type layers, column type length parameters). " +
   "Raw facts only — use it to CHECK the model against a spec independently of the apply_* tools.",
   {
-    categories: z.array(z.enum(["structural_columns", "columns", "floors", "walls", "types"])).optional()
+    categories: z.array(z.enum(["structural_columns", "columns", "floors", "walls", "doors", "windows", "types"])).optional()
       .describe("Default: all"),
   },
   async ({ categories }) => {
