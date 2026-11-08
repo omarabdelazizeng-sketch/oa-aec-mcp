@@ -329,6 +329,36 @@ server.tool(
 );
 
 server.tool(
+  "apply_walls",
+  "Create or update straight walls in the active Revit model, in ONE transaction (modeling step 7). " +
+  "Idempotent: matched by Mark; unchanged walls are left alone, changed ones are replaced with the same Mark; " +
+  "walls whose Mark is not in the spec are never touched. start/end = the wall's location line in plan (mm); " +
+  "location_line sets which face the line refers to. With top_level the height follows it, otherwise height_mm is used. " +
+  "Edges within 0.5 deg of an axis (but not exact) are rejected ('slightly off axis'): snap them in the spec. " +
+  "Verify afterwards with get_model_elements.",
+  {
+    walls: z.array(z.object({
+      mark: z.string().min(1),
+      type: z.string().min(1).describe("Existing wall type name (see ensure_types)"),
+      level: z.string().min(1).describe("Base level"),
+      base_offset_mm: z.number().default(0),
+      top_level: z.string().min(1).optional(),
+      top_offset_mm: z.number().default(0),
+      height_mm: z.number().positive().optional().describe("Unconnected height; used only without top_level"),
+      start: pt,
+      end: pt,
+      location_line: z.enum(["Center", "CoreCenter", "FinishFaceExterior", "FinishFaceInterior", "CoreExterior", "CoreInterior"]).default("Center"),
+      structural_usage: z.enum(["NonBearing", "Bearing", "Shear", "Combined"]).default("NonBearing"),
+      flip: z.boolean().default(false),
+    })).min(1),
+  },
+  async ({ walls }) => {
+    const result = await callWebSocket("apply_walls", { walls }, 35_000);
+    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+  }
+);
+
+server.tool(
   "get_model_elements",
   "Read-only. Report structural columns, architectural columns, floors, walls and their types from the active Revit model, " +
   "in mm (positions, levels, offsets, floor sketch loops, type layers, column type length parameters). " +
